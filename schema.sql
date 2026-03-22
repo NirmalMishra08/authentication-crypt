@@ -4,3 +4,4 @@ CREATE TABLE users (
   password TEXT,
   createdAt TIMESTAMPTZ DEFAULT now()
 );
+

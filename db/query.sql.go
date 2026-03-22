@@ -3,10 +3,12 @@
 //   sqlc v1.29.0
 // source: query.sql
 
-package main
+package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getUserByUserName = `-- name: GetUserByUserName :one
@@ -24,4 +26,18 @@ func (q *Queries) GetUserByUserName(ctx context.Context, username string) (User,
 		&i.Createdat,
 	)
 	return i, err
+}
+
+const insertUser = `-- name: InsertUser :exec
+INSERT into users (username, password) values ($1, $2)
+`
+
+type InsertUserParams struct {
+	Username string
+	Password pgtype.Text
+}
+
+func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) error {
+	_, err := q.db.Exec(ctx, insertUser, arg.Username, arg.Password)
+	return err
 }
