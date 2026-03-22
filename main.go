@@ -136,7 +136,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	ipAttempts, _ := a.IncrementIPAttempts(ip)
 
 	if ipAttempts > 20 {
-		fmt.Errorf("too many requests")
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
 
@@ -162,7 +162,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 
 	locked, err := a.IsUserLocked(strconv.Itoa(int(user.ID)))
 	if locked {
-		fmt.Errorf("account locked, try later")
+		http.Error(w, "account locked, try later", 500)
 		return
 	}
 
@@ -172,7 +172,8 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		attempts, _ := a.IncrementAttempts(userIdStr)
 		// progressive delay
-		delay := time.Duration(attempts*500) * time.Millisecond
+		// delay := time.Duration(attempts*500) * time.Millisecond
+		delay := time.Second
 		if delay > 5*time.Second {
 			delay = 5 * time.Second
 		}
@@ -183,10 +184,11 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 			a.LockUser(userIdStr)
 		}
 
-		fmt.Errorf("invalid email or password")
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		return
-
 	}
+
+	a.ResetAttempts(userIdStr)
 
 	w.Write([]byte("Login successful"))
 
