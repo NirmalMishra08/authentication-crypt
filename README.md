@@ -1,291 +1,232 @@
-# 🔐 Secure Authentication Service (Go + Redis + PostgreSQL)
+# authentication-crypt 🔐  
+Secure Authentication Service (Go + PostgreSQL + Redis)
 
-A production-ready authentication backend built with **Golang**, designed to handle **secure login**, **brute-force protection**, and **timing attack mitigation** using modern backend practices.
+A minimal authentication backend written in **Go** that focuses on practical security controls for login systems:
 
----
-
-## 🚀 Features
-
-- 🔑 Secure user registration with **bcrypt hashing**
-- 🔐 Login system with **timing attack protection**
-- 🚫 Account lockout after multiple failed attempts
-- 🐢 Progressive delay to slow brute-force attacks
-- 🌍 IP-based rate limiting
-- ⚡ Redis-powered high-performance tracking
-- 🧠 Protection against user enumeration attacks
-- 🧱 Clean and scalable architecture using Chi router
+- Password hashing with **bcrypt**
+- **User enumeration mitigation**
+- **Brute-force protection** using Redis:
+  - Per-user login attempt tracking + temporary lockout
+  - Per-IP rate limiting (basic)
 
 ---
 
-## 🏗️ Tech Stack
+## Features
 
-- **Go (Golang)** – Backend server
-- **PostgreSQL** – Database
-- **Redis** – Rate limiting & lock management
-- **Chi Router** – HTTP routing
-- **bcrypt** – Password hashing
+- **Register** users (`POST /register`)
+- **Login** users (`POST /login`)
+- Passwords stored hashed (bcrypt)
+- Generic auth errors (helps prevent user enumeration)
+- Redis-backed:
+  - failed-attempt counters with TTL
+  - account lock keys with TTL
+  - per-IP attempt counter with TTL
 
 ---
 
-## 📂 Project Structure
+## Tech Stack
 
+- **Go** (HTTP server)
+- **Chi** router + middleware logger
+- **PostgreSQL** (user storage)
+- **Redis** (rate limiting + lockouts)
+- **sqlc** style SQL queries (config present)
 
+---
+
+## Project Structure
+
+```text
 .
-├── main.go
-├── db/
-│ ├── queries.sql
-│ └── generated files (sqlc)
-├── .env
-└── README.md
+├── main.go          # HTTP server + handlers
+├── go.mod / go.sum
+├── schema.sql       # users table
+├── query.sql        # SQL queries used by sqlc-generated code
+├── sqlc.yaml        # sqlc configuration
+└── db/              # sqlc-generated Go code (package db)
+```
 
-
----
-
-## ⚙️ Environment Variables
-
-Create a `.env` file in the root directory:
-
-
-POSTGRES_CONN=postgres://user:password@localhost:5432/dbname
-REDIS_CONN=redis://localhost:6379
-
+> Note: `db/` is expected to contain sqlc-generated files used by `main.go` (`main.go/db` import).
 
 ---
 
-## 🛠️ Installation & Setup
+## Requirements
 
-### 1. Clone the repository
-
-git clone <your-repo-url>
-cd project
-
-
-### 2. Install dependencies
-
-go mod tidy
-
-
-### 3. Start required services
-Ensure the following are running:
+- Go (your `go.mod` specifies `go 1.25.0`)
 - PostgreSQL
 - Redis
-
-### 4. Run the server
-
-go run main.go
-
-
-Server will start at:
-
-http://localhost:8080
-
+- (Optional but recommended) `sqlc` if you want to regenerate the `db/` package
 
 ---
 
-## 📡 API Endpoints
+## Environment Variables
 
-### 🔹 Register
+Create a `.env` file in the repository root:
+
+```env
+POSTGRES_CONN=postgres://user:password@localhost:5432/dbname
+REDIS_CONN=redis://localhost:6379
+```
+
+Examples:
+- `POSTGRES_CONN=postgres://postgres:postgres@localhost:5432/authdb?sslmode=disable`
+- `REDIS_CONN=redis://localhost:6379/0`
+
+---
+
+## Database Setup (PostgreSQL)
+
+1) Create the database (example):
+
+```bash
+createdb authdb
+```
+
+2) Apply schema:
+
+```bash
+psql "$POSTGRES_CONN" -f schema.sql
+```
+
+This creates the `users` table:
+
+- `id BIGSERIAL PRIMARY KEY`
+- `username TEXT NOT NULL`
+- `password TEXT`
+- `createdAt TIMESTAMPTZ DEFAULT now()`
+
+---
+
+## Redis Setup
+
+Make sure Redis is running locally:
+
+```bash
+redis-server
+```
+
+The service uses Redis keys like:
+
+- `login:attempts:user:<userID>` (TTL 15 min)
+- `login:lock:user:<userID>` (TTL 15 min)
+- `login:attempts:ip:<ip>` (TTL 15 min)
+
+---
+
+## Run the Server
+
+Install dependencies:
+
+```bash
+go mod tidy
+```
+
+Start the server:
+
+```bash
+go run main.go
+```
+
+Server listens on:
+- `http://localhost:8080`
+
+---
+
+## API
+
+### Health check / root
+
+**GET** `/`
+
+Response:
+- `Hello world`
+
+---
+
+### Register
 
 **POST** `/register`
 
-#### Request Body:
+Request body:
 
+```json
 {
-"username": "testuser",
-"password": "securepassword"
+  "username": "testuser",
+  "password": "securepassword"
 }
+```
 
+Responses:
+- `201 Created` → `created new user`
+- `400 Bad Request` → invalid body or DB insert error
 
-#### Response:
+Example:
 
-201 Created
-
+```bash
+curl -i -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"securepassword"}'
+```
 
 ---
 
-### 🔹 Login
+### Login
 
 **POST** `/login`
 
-#### Request Body:
+Request body:
 
+```json
 {
-"username": "testuser",
-"password": "securepassword"
+  "username": "testuser",
+  "password": "securepassword"
 }
+```
 
+Typical responses:
+- `200 OK` → `Login successful`
+- `401 Unauthorized` → `Invalid username or password`
+- `429 Too Many Requests` → `Too many requests` (per-IP threshold)
 
-#### Responses:
+Security behavior:
+- If the username does not exist, the handler sleeps briefly before responding (reduces user enumeration via timing).
+- Failed logins increment counters; too many failures can lock the account temporarily.
 
-200 OK → Login successful
-401 Unauthorized → Invalid username or password
-403 Forbidden → Account locked
-429 Too Many Requests → Rate limit exceeded
+Example:
 
-
----
-
-## 🔐 Security Mechanisms
-
-### 1. Password Hashing
-- Uses `bcrypt`
-- Passwords are never stored in plain text
-
----
-
-### 2. Timing Attack Protection
-- Uses `bcrypt.CompareHashAndPassword`
-- Prevents attackers from guessing passwords via response timing
+```bash
+curl -i -X POST http://localhost:8080/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"securepassword"}'
+```
 
 ---
 
-### 3. Failed Attempt Tracking (Redis)
+## Notes / Known Limitations
 
-#### Redis Keys:
-
-login:attempts:user:<userID>
-login:attempts:ip:<ip>
-login:lock:user:<userID>
-
+- **IP detection** currently uses `r.RemoteAddr` directly. In real deployments behind a proxy/load balancer, you’d typically use `X-Forwarded-For` (carefully, only if you trust the proxy).
+- The “progressive delay” is currently a fixed `1s` delay on failures (the commented code suggests an intent to scale by attempt count).
+- Login lockout currently returns a `500` status in code; typically this should be `403 Forbidden` or `423 Locked`.
 
 ---
 
-### 4. Account Locking
+## Future Improvements (Ideas)
 
-- Locks account after **5 failed attempts**
-- Lock duration: **15 minutes**
-
----
-
-### 5. Progressive Delay
-
-Each failed login increases response delay:
-
-| Attempts | Delay |
-|--------|------|
-| 1 | 500ms |
-| 2 | 1s |
-| 3 | 1.5s |
-| 4+ | max 5s |
+- JWT access + refresh tokens
+- MFA
+- Better IP parsing / proxy-aware IP detection
+- Structured logging + metrics
+- Configurable thresholds (attempt limits, lock durations) via env vars
+- Proper HTTP status codes for lockouts
 
 ---
 
-### 6. IP Rate Limiting
+## Contributing
 
-- Tracks requests per IP
-- Blocks after **20 attempts within 15 minutes**
-
----
-
-### 7. User Enumeration Protection
-
-All authentication errors return:
-
-Invalid username or password
-
-
-This prevents attackers from identifying valid users.
+PRs/issues welcome. If you add new endpoints, please update the API section and include curl examples.
 
 ---
 
-## 🔄 Authentication Flow
+## License
 
-
-Client Request
-↓
-Extract IP Address
-↓
-Check IP Rate Limit (Redis)
-↓
-Check Account Lock (Redis)
-↓
-Fetch User (PostgreSQL)
-↓
-Compare Password (bcrypt)
-↓
-If Failed:
-→ Increment Attempts (Redis)
-→ Apply Delay
-→ Lock Account if Threshold Reached
-↓
-If Success:
-→ Reset Attempts
-→ Allow Access
-
-
----
-
-## 🧠 Design Decisions
-
-### Why Redis?
-- Fast atomic operations (`INCR`)
-- Built-in TTL (automatic expiration)
-- Scales across multiple servers
-
----
-
-### Why not store attempts in DB?
-- High-frequency writes are inefficient
-- Increases database load unnecessarily
-
----
-
-### Why progressive delay?
-- Slows down attackers
-- Maintains usability for legitimate users
-
----
-
-## ⚠️ Security Best Practices Implemented
-
-- ✅ Constant-time password comparison  
-- ✅ Generic error messages  
-- ✅ Rate limiting (IP + user)  
-- ✅ Temporary account lock (not permanent)  
-- ✅ No sensitive data exposure  
-
----
-
-## 🧪 Testing
-
-Try the following:
-
-- Enter wrong password multiple times → account locks  
-- Send many requests from same IP → rate limiting triggers  
-- Restart server → Redis still enforces limits  
-
----
-
-## 🚀 Future Improvements
-
-- 🔑 JWT authentication (access + refresh tokens)
-- 📱 Multi-factor authentication (MFA)
-- 🛡️ CAPTCHA after repeated failures
-- 🌍 Geo-location anomaly detection
-- 📊 Monitoring & alert system
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome!  
-Feel free to open issues or submit pull requests.
-
----
-
-## 📜 License
-
-MIT License
-
----
-
-## 💡 Author Notes
-
-This project demonstrates real-world backend security techniques such as:
-
-- Brute-force attack prevention  
-- Timing attack mitigation  
-- Distributed rate limiting  
-
-Designed with scalability and security in mind.
-
+MIT (if you plan to use MIT, consider adding a `LICENSE` file to the repo).
